@@ -1,0 +1,11 @@
+AND out(a), in(x), in(q2)
+OR out(d1), in(a), in(q1b)
+DFF d(d1), q(q1), q_bar(q1b), clock(clk)
+
+AND out(b), in(x), in(q1)
+OR out(d2), in(b), in(q2)
+DFF d(d2), q(q2), clock(clk)
+
+OR out(z), in(q1), in(q2)
+
+STUCK_AT a, 1
