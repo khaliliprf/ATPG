@@ -1,0 +1,6 @@
+AND out(C), in(A), in(B) 
+OR out(E), in(B), in(C) 
+DFF d(E), clock(ck), Q(A), preset(P) 
+BUFF in(A), out(F) 
+STUCK_AT B, 0 
+STUCK_AT F, 1

@@ -1,0 +1,24 @@
+FANOUT  in(An), out(P), out(S)
+FANOUT  in(Bn), out(K), out(L)
+FANOUT  in(F), out(J), out(M)
+FANOUT  in(T), out(G), out(E)
+FANOUT  in(R), out(U), out(V)
+FANOUT  in(Cn), out(H), out(I)
+
+
+AND out(F), in(P), in(K)
+AND out(T), in(J_bar), in(N)
+AND out(R), in(G), in(H)
+AND out(Sn), in(U_bar), in(O)
+
+OR out(N), in(S), in(L)
+OR out(O), in(I), in(E)
+OR out(Cn1), in(V), in(M)
+
+NOT in(J), out(J_bar) 
+NOT in(U), out(U_bar) 
+
+
+DFF d(Cn1), clock(Clk), q(Cn)
+
+STUCK_AT J, 0

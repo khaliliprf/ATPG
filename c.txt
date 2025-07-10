@@ -1,0 +1,10 @@
+FANOUT  in(A), out(C), out(D)
+FANOUT  in(Q1), out(F), out(G)
+
+AND out(E), in(C), in(F)
+OR out(B), in(G), in(Q2)
+
+DFF d(E), clock(Clk), q(Q1) 
+DFF d(D), clock(Clk), q(Q2) 
+
+STUCK_AT A, 1

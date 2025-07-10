@@ -1,0 +1,22 @@
+FANOUT  in(2882), out(3434), out(3433)
+FANOUT  in(3691), out(3907), out(3906)
+FANOUT  in(1482), out(2312), out(2318), out(2313)
+FANOUT  in(2891), out(3443), out(3442), out(3437)
+
+AND out(1475), in(652), in(650)
+
+AND out(4033), in(25), in(2312), in(3907)
+AND out(3614), in(3434), in(3437)
+AND out(3615), in(2313), in(3442)
+AND out(4032), in(3906), in(3433), in(24)
+
+AND out(4737), in(4273), in(3205)
+
+OR out(4273), in(4033), in(3614), in(3615), in(4032)
+
+NOT in(2318), out(2882) 
+NOT in(1475), out(2891) 
+NOT in(3443), out(3691) 
+
+
+STUCK_AT 3442, 0
