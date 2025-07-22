@@ -1,0 +1,13 @@
+FANOUT IN(J), OUT(V) , OUT(U)
+FANOUT IN(Z), OUT(O) , OUT(Q)
+FANOUT IN(C), OUT(M) , OUT(Z)
+FANOUT IN(B), OUT(Y) , OUT(S)
+FANOUT IN(A), OUT(E) , OUT(D)
+FANOUT IN(Y), OUT(G) , OUT(H)
+AND out(L), in(D), in(G)
+AND out(T), in(U), in(O)
+AND out(P), in(E), in(V), in(K)
+OR out(F), in(M), in(H)
+OR out(J), in(L), in(F)
+XOR out(K), in(S), in(Q)
+STUCK_AT Y, 0

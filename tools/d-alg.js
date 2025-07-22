@@ -1,4 +1,4 @@
-const { readCircuitDescription } = require("./parser");
+const { log } = require("../tools/log");
 
 // --- 1. SignalValue Enum ---
 const SignalValue = {
@@ -9,6 +9,12 @@ const SignalValue = {
   D_BAR: "D_BAR", // 0/1 (Good machine is 0, Faulty machine is 1)
 };
 
+function backwardImplicationSigValue(signalValue) {
+  if (signalValue === "0" || signalValue === "1" || signalValue === "X")
+    return signalValue;
+  if (signalValue === "D") return "1";
+  if (signalValue === "D_BAR") return "0";
+}
 // --- 2. Helper Functions for Gate Logic ---
 
 /**
@@ -186,6 +192,7 @@ class CircuitState {
    * @returns {boolean} True if the assignment is consistent (no conflict), false otherwise.
    */
   assign(wire, value) {
+    log(wire, value);
     const currentValue = this.values[wire];
 
     if (currentValue === SignalValue.X) {
@@ -247,6 +254,10 @@ class CircuitState {
     return this.values[wire];
   }
 
+  getFault(f) {
+    return this.stuckFaults;
+  }
+
   /**
    * ایجاد یک کپی عمیق از وضعیت فعلی مدار. این متد برای Backtracking در الگوریتم D-Algorithm حیاتی است.
    * Creates a deep copy of the current CircuitState. Essential for backtracking.
@@ -270,6 +281,7 @@ class ImplicationStack {
    * @param {object} item - The item to push, usually { wire, value, triedAlternate: boolean }.
    */
   push(item) {
+    log("pushed to ImplicationStack", item);
     this.stack.push(item);
   }
 
@@ -278,6 +290,7 @@ class ImplicationStack {
    * @returns {object | undefined} The popped item, or undefined if stack is empty.
    */
   pop() {
+    log("poped from ImplicationStack");
     return this.stack.pop();
   }
 
@@ -286,6 +299,8 @@ class ImplicationStack {
    * @returns {object | undefined} The top item, or undefined if stack is empty.
    */
   peek() {
+    log("peeked to ImplicationStack");
+
     return this.stack[this.stack.length - 1];
   }
 
@@ -309,9 +324,13 @@ class ImplicationStack {
       // Only consider decisions (not just implied values) that haven't tried alternate
       if (item.isDecision && !item.triedAlternate) {
         item.triedAlternate = true; // Mark as tried
+        log("find Untried Alternate returned", item);
+
         return item;
       }
     }
+    log("find Untried Alternate null");
+
     return null;
   }
 
@@ -327,226 +346,438 @@ class ImplicationStack {
 }
 
 // --- 5. Implication and Consistency Check Function (implyAndCheck) ---
-/**
- * Performs forward and backward implications on the circuit state until no more implications
- * can be made or a conflict is detected. Updates D-frontier and J-frontier.
- * @param {CircuitState} currentState - The current state of the circuit wires.
- * @param {object} circuitInfo - The structural information of the circuit.
- * @param {Set<string>} dFrontier - Set of gate outputs currently in the D-frontier.
- * @param {Set<string>} jFrontier - Set of gate outputs currently in the J-frontier.
- * @returns {boolean} True if implications are consistent, false if a conflict occurs.
- */
+// Performs forward and backward implications
+// Updates dFrontier and jFrontier sets
+// Returns true if consistent, false if conflict
 function implyAndCheck(currentState, circuitInfo, dFrontier, jFrontier) {
+  log("imply and check get called with following parameters:");
+  // log("currentState", currentState);
+  // log("circuitInfo", circuitInfo);
+  log("dFrontier", dFrontier);
+  log("jFrontier", jFrontier);
   let conflictFound = false;
 
   // Queue for wires whose values have changed and need to be propagated
+  // A manual queue allows adding elements while iterating, crucial for implication chaining.
   const processingQueue = [];
-  const processedInThisCycle = new Set(); // To prevent redundant processing and loops within this call
+  // Set to keep track of wires already processed in *this specific call* of implyAndCheck
+  // to prevent redundant work and infinite loops in cyclic paths (though combinational circuits are acyclic).
+  const processedInThisCycle = new Set();
 
-  // Initialize queue with all currently non-X wires
+  // Initialize queue with all currently non-X wires from the current state.
+  // These are the starting points for implications.
   for (const wireId in currentState.values) {
     if (currentState.values[wireId] !== SignalValue.X) {
       processingQueue.push(wireId);
+      log(
+        `1 - ${wireId} pushed to processingQueue", processingQueue: ${processingQueue}`
+      );
     }
   }
 
-  // Clear frontiers before re-calculation based on current state
+  // Clear frontiers before re-calculation based on current state.
+  // This ensures they accurately reflect the current circuit state after implications.
   dFrontier.clear();
   jFrontier.clear();
 
-  let queueIndex = 0; // Manual index for queue to allow adding elements while iterating
+  let queueIndex = 0; // Manual index for the processing queue
 
   while (queueIndex < processingQueue.length) {
-    const currentWire = processingQueue[queueIndex++];
+    // log("currentState", currentState.values);
 
-    // Skip if already processed in this specific `implyAndCheck` call
+    log("==========imply and check new round==============");
+    const currentWire = processingQueue[queueIndex++]; // Get the next wire to process
+    log({ currentWire });
+
+    // Skip if this wire has already been fully processed in this implication cycle.
     if (processedInThisCycle.has(currentWire)) {
       continue;
     }
-    processedInThisCycle.add(currentWire);
+    processedInThisCycle.add(currentWire); // Mark as processed for this cycle.
 
-    // --- Forward Implications ---
-    // Find all gates where `currentWire` is an input
+    // TODO
+    log(" ------------------ 1. Forward Implications ---------------");
+    // These propagate signal values (0, 1, X, D, D_BAR) towards the circuit outputs.
+
+    // NEW: Handle Fanout Stem Implications.
+    // If the currentWire is a fanout stem, its value must propagate to all its branches.
+    const fanoutEntryForCurrentWire = circuitInfo.fanouts.find(
+      f => f.input === currentWire
+    );
+
+    if (fanoutEntryForCurrentWire) {
+      log(
+        `current wire ${currentWire} is a fanout stem and branches are ${fanoutEntryForCurrentWire.outputs}`
+      );
+      // Iterate over all branches connected to this fanout stem.
+      for (const branchWire of fanoutEntryForCurrentWire.outputs) {
+        // If a branch is currently unknown (X), assign it the stem's value.
+        if (currentState.get(branchWire) === SignalValue.X) {
+          log(
+            "If a branch is currently unknown (X), assign it the stems value."
+          );
+          if (!currentState.assign(branchWire, currentState.get(currentWire))) {
+            log(
+              "check inconsistency for assigning current wire() value to branch"
+            );
+            conflictFound = true; // Conflict if assignment is inconsistent.
+            break; // Break from branch loop on conflict.
+          }
+          processingQueue.push(branchWire); // If value changed/assigned, push to queue for further implications.
+          log(
+            `2 - ${branchWire} pushed to processingQueue: ${processingQueue}`
+          );
+        }
+        // If a branch already has a value, check for consistency with the stem's value.
+        else if (
+          branchWire !== currentState.circuitInfo.stuckFaults[0].wire &&
+          currentState.get(branchWire) !== currentState.get(currentWire)
+        ) {
+          conflictFound = true; // Conflict if branch value is different from stem.
+          break; // Break from branch loop on conflict.
+        }
+      }
+    }
+    if (conflictFound) return false; // Immediate return if conflict found.
+
+    // Find all gates where `currentWire` is an input.
+    // These gates are directly affected by the `currentWire`'s value.
     const gatesDrivenByCurrentWire = circuitInfo.gates.filter(gate =>
       gate.inputs.includes(currentWire)
     );
 
+    log(
+      `gates that ${currentWire} is an input(gates Driven By Current Wire ${currentWire}) are:`
+    );
+    log(gatesDrivenByCurrentWire);
     for (const gate of gatesDrivenByCurrentWire) {
+      // Get current values of all inputs to the gate.
       const inputValuesForGate = gate.inputs.map(inputWire =>
         currentState.get(inputWire)
       );
+
+      log(currentState.get(gate.output));
+      // const oldOutputValue = backwardImplicationSigValue(
+      //   currentState.get(gate.output)
+      // );
+
       const oldOutputValue = currentState.get(gate.output);
+      // Store old output value for comparison.
 
+      // Simulate the gate to determine its implied output value.
       const simulatedOutput = simulateGate(gate.type, inputValuesForGate);
+      log({ inputValuesForGate, oldOutputValue, simulatedOutput });
 
-      if (simulatedOutput !== SignalValue.X) {
-        // Attempt to assign the simulated output value to the gate's output wire
+      // If the simulated output is a definite value (not X).
+      if (
+        simulatedOutput !== SignalValue.X &&
+        gate.output !== currentState.circuitInfo.stuckFaults[0].wire
+      ) {
+        log("insideeeeeeee");
+        // Attempt to assign this new value to the gate's output wire.
         if (!currentState.assign(gate.output, simulatedOutput)) {
-          conflictFound = true;
-          break; // Conflict detected, break from inner loop
+          conflictFound = true; // Conflict detected during assignment.
+          break; // Break from current gate loop.
         }
-        // If the output value was X and is now determined, or changed from non-X to non-X,
-        // add it to the queue for further propagation.
+        // If the output value has changed (from X to definite, or definite to a different definite),
+        // push the output wire to the queue for further implications.
         if (
           oldOutputValue === SignalValue.X ||
           oldOutputValue !== simulatedOutput
         ) {
           processingQueue.push(gate.output);
+          log(
+            `3 - ${gate.output} pushed to processingQueue", processingQueue: ${processingQueue}`
+          );
         }
       }
 
-      // Update D-frontier: "output value is currently X but have one or more error signals (D's or D_BAR) on their inputs." [cite: 10]
+      // Update D-frontier: Gates with D/D_BAR at inputs and X at output.
       const hasDInput = inputValuesForGate.some(val =>
         [SignalValue.D, SignalValue.D_BAR].includes(val)
       );
       const isOutputX = currentState.get(gate.output) === SignalValue.X;
 
+      log(
+        `gate ${gate.type} with input ${gate.inputs} and output ${
+          gate.output
+        } has ${hasDInput ? "" : "not"} D in inputs and has ${
+          isOutputX ? "" : "not"
+        } X in output(output is ${currentState.get(gate.output)})`
+      );
+      // log({ hasDInput, isOutputX });
+
       if (hasDInput && isOutputX) {
-        dFrontier.add(gate.output);
-      } else if (
+        dFrontier.add(gate.output); // Add to D-frontier if it matches the definition.
+        log(`${gate.output} added to dFrontier: ${Array.from(dFrontier)}`);
+      }
+      // If the gate's output now contains a D or D_BAR, the fault effect has propagated through it.
+      // It is no longer a 'frontier' for its inputs.
+      else if (
         [SignalValue.D, SignalValue.D_BAR].includes(
           currentState.get(gate.output)
         )
       ) {
-        // If the gate's output itself became D or D_BAR, it means fault effect propagated through it.
-        // It is no longer a 'frontier' in terms of its inputs' effects.
-        dFrontier.delete(gate.output);
+        log(`${gate.output} remove from dFrontier: ${Array.from(dFrontier)}`);
+        dFrontier.delete(gate.output); // Remove from D-frontier.
       }
     }
-    if (conflictFound) return false;
+    if (conflictFound) return false; // Immediate return if conflict found during forward gate simulation.
 
-    // --- Backward Implications (Line Justification) ---
-    // Find the gate whose output is `currentWire`. This is crucial for justifying `currentWire`'s value.
+    // --- 2. Backward Implications (Line Justification) ---
+    log("-------- 2. Backward Implications (Line Justification) ---------");
+    // These determine input values required to justify a known output value.
+
+    // NEW: Handle Fanout Branch Justification.
+    // If the `currentWire` is a fanout branch and its value is known, it must justify its fanout stem.
+    const fanoutStemEntryForBranch = circuitInfo.fanouts.find(f =>
+      f.outputs.includes(currentWire)
+    );
+
+    // Only process if currentWire is indeed a branch AND it has a defined value (not X).
+    if (
+      fanoutStemEntryForBranch &&
+      currentState.get(currentWire) !== SignalValue.X
+    ) {
+      log(
+        `currentWire ${currentWire} is indeed a fanout branch AND it has a defined value (not X), fanout stem: ${fanoutStemEntryForBranch.input}, branches: ${fanoutStemEntryForBranch.outputs}`
+      );
+
+      const stemWire = fanoutStemEntryForBranch.input; // The main wire (stem) of the fanout.
+      const currentValueOnStem = currentState.get(stemWire); // Current value of the stem.
+      const currentBranchValue = currentState.get(currentWire); // Value on the branch (currentWire).
+
+      // If the stem is unknown (X), assign it the branch's value.
+      // This is a direct backward implication from branch to stem. [cite: 761]
+      if (currentValueOnStem === SignalValue.X) {
+        // TODO
+        if (
+          !currentState.assign(
+            stemWire,
+            backwardImplicationSigValue(currentBranchValue)
+          )
+        ) {
+          conflictFound = true; // Conflict if assignment is inconsistent.
+          break; // Break on conflict.
+        }
+        processingQueue.push(stemWire); // Stem's value changed, push to queue for further implications (e.g., to other branches).
+        log(`4 - ${stemWire} pushed to processingQueue: ${processingQueue}`);
+      }
+      // If the stem already has a value, check for consistency with the branch's value.
+      else if (
+        currentBranchValue !== (SignalValue.D || SignalValue.D_BAR) &&
+        currentValueOnStem !== currentBranchValue
+      ) {
+        conflictFound = true; // Conflict if stem value is different from branch.
+        break; // Break on conflict.
+      }
+    }
+    if (conflictFound) return false; // Immediate return if conflict found during fanout branch justification.
+
+    // Original: Find the gate whose output is `currentWire`.
+    // This is necessary for justifying the value on `currentWire` by determining its inputs.
     const drivingGate = currentState.gatesByOutput.get(currentWire);
 
-    // **CRITICAL FIX**: Only proceed if `currentWire` is an output of a gate (i.e., not a primary input).
-    // Primary inputs do not have a "driving gate" in this context and do not need justification from preceding logic.
+    // Only proceed with gate-specific backward implications if `currentWire` is an output of a gate.
+    // Primary inputs do not have a driving gate and do not need backward justification from preceding logic.
     if (drivingGate) {
-      const currentOutputValue = currentState.get(currentWire);
+      log(
+        `gates that ${currentWire} is an output(gates Driven By Current Wire ${currentWire}) are`
+      );
+      log(drivingGate);
 
-      // Only attempt justification if the output value is known (not X)
+      const currentOutputValue = backwardImplicationSigValue(
+        currentState.get(currentWire)
+      );
+
+      log({ currentOutputValue });
+
+      // Only attempt justification if the output value of the driving gate is known (not X).
       if (currentOutputValue !== SignalValue.X) {
-        const inputValuesForDrivingGate = drivingGate.inputs.map(inputWire =>
-          currentState.get(inputWire)
-        );
-        const simulatedOutputFromInputs = simulateGate(
-          drivingGate.type,
-          inputValuesForDrivingGate
-        );
-
-        // Check if the gate's output is consistent with its current inputs, and if it needs justification.
-        // "The J-frontier... consists of all gates whose output value is known but is not implied by its input values." [cite: 13]
-        const allInputsKnown = inputValuesForDrivingGate.every(
-          val => val !== SignalValue.X
-        );
-
-        if (allInputsKnown) {
-          // If all inputs are known, the output must be implied correctly or it's a conflict.
-          if (simulatedOutputFromInputs !== currentOutputValue) {
-            conflictFound = true; // Direct conflict: known inputs imply one thing, but output is another.
-            break;
-          } else {
-            // All inputs known, output is consistent, so it's justified.
-            jFrontier.delete(drivingGate.output);
-          }
-        } else {
-          // Inputs are not all known, but output is known. It *might* need justification.
-          // If the output is NOT implied by current known inputs (e.g., AND gate output is 1, but no input is 1 yet)
-          // or if the simulation from current inputs is X while output is known.
-          if (
-            simulatedOutputFromInputs === SignalValue.X ||
-            simulatedOutputFromInputs !== currentOutputValue
-          ) {
-            jFrontier.add(drivingGate.output); // Add to J-frontier as it needs justification
-          } else {
-            // Even with some X inputs, the known inputs might already imply the output (e.g., AND gate with a 0 input -> output 0)
-            jFrontier.delete(drivingGate.output);
-          }
-        }
-
-        // Perform unique backward implications. If an output value uniquely determines one or more inputs, assign them.
-        // These are critical for reducing search space.
+        // Perform unique backward implications.
+        // These are specific cases where an output and gate type uniquely determine one or more inputs.
         const gateInputs = drivingGate.inputs;
         const gateType = drivingGate.type;
 
-        // Example: NOT gate (Input is uniquely determined by output)
+        // Example: NOT gate (Input is uniquely determined by output).
         if (gateType === "NOT") {
           const requiredInput =
             currentOutputValue === SignalValue["0"]
               ? SignalValue["1"]
               : SignalValue["0"];
           if (currentState.get(gateInputs[0]) === SignalValue.X) {
-            if (!currentState.assign(gateInputs[0], requiredInput)) {
+            if (
+              !currentState.assign(
+                gateInputs[0],
+                backwardImplicationSigValue(requiredInput)
+              )
+            ) {
               conflictFound = true;
               break;
             }
-            processingQueue.push(gateInputs[0]);
+            processingQueue.push(gateInputs[0]); // Push new implied input to queue.
+            log(
+              `5 - ${gateInputs[0]} pushed to processingQueue: ${processingQueue}`
+            );
           }
         }
-        // Example: NAND output '0' means ALL inputs MUST be '1'
+        // Example: NAND output '0' means ALL inputs MUST be '1'.
         else if (
           gateType === "NAND" &&
           currentOutputValue === SignalValue["0"]
         ) {
           for (const inputWire of gateInputs) {
             if (currentState.get(inputWire) === SignalValue.X) {
-              if (!currentState.assign(inputWire, SignalValue["1"])) {
+              if (
+                !currentState.assign(
+                  inputWire,
+                  backwardImplicationSigValue(SignalValue["1"])
+                )
+              ) {
                 conflictFound = true;
                 break;
               }
               processingQueue.push(inputWire);
+              log(
+                `6 - ${inputWire} pushed to processingQueue: ${processingQueue}`
+              );
             }
           }
         }
-        // Example: AND output '1' means ALL inputs MUST be '1'
+        // Example: AND output '1' means ALL inputs MUST be '1'.
         else if (
           gateType === "AND" &&
           currentOutputValue === SignalValue["1"]
         ) {
           for (const inputWire of gateInputs) {
             if (currentState.get(inputWire) === SignalValue.X) {
-              if (!currentState.assign(inputWire, SignalValue["1"])) {
+              if (
+                !currentState.assign(
+                  inputWire,
+                  backwardImplicationSigValue(SignalValue["1"])
+                )
+              ) {
                 conflictFound = true;
                 break;
               }
               processingQueue.push(inputWire);
+              log(
+                `7 - ${inputWire} pushed to processingQueue: ${processingQueue}`
+              );
             }
           }
         }
-        // Example: NOR output '1' means ALL inputs MUST be '0'
+        // Example: NOR output '1' means ALL inputs MUST be '0'.
         else if (
           gateType === "NOR" &&
           currentOutputValue === SignalValue["1"]
         ) {
           for (const inputWire of gateInputs) {
             if (currentState.get(inputWire) === SignalValue.X) {
-              if (!currentState.assign(inputWire, SignalValue["0"])) {
+              if (
+                !currentState.assign(
+                  inputWire,
+                  backwardImplicationSigValue(SignalValue["0"])
+                )
+              ) {
                 conflictFound = true;
                 break;
               }
               processingQueue.push(inputWire);
+              log(
+                `8 - ${inputWire} pushed to processingQueue: ${processingQueue}`
+              );
             }
           }
         }
-        // Example: OR output '0' means ALL inputs MUST be '0'
+        // Example: OR output '0' means ALL inputs MUST be '0'.
         else if (gateType === "OR" && currentOutputValue === SignalValue["0"]) {
           for (const inputWire of gateInputs) {
             if (currentState.get(inputWire) === SignalValue.X) {
-              if (!currentState.assign(inputWire, SignalValue["0"])) {
+              if (
+                !currentState.assign(
+                  inputWire,
+                  backwardImplicationSigValue(SignalValue["0"])
+                )
+              ) {
                 conflictFound = true;
                 break;
               }
               processingQueue.push(inputWire);
+              log(
+                `9 - ${inputWire} pushed to processingQueue: ${processingQueue}`
+              );
             }
           }
         }
-        // Add more unique backward implications for other gates/values as needed.
-      }
-    }
-    if (conflictFound) return false;
-  }
 
-  return !conflictFound; // Return true if no conflict occurred during implications
+        // Get current values of all inputs to the driving gate.
+        const inputValuesForDrivingGate = drivingGate.inputs.map(inputWire =>
+          currentState.get(inputWire)
+        );
+        // Simulate the gate with its current input values to see what output it would imply.
+        log({ inputValuesForDrivingGate });
+        const simulatedOutputFromInputs = simulateGate(
+          drivingGate.type,
+          inputValuesForDrivingGate
+        );
+        log({ simulatedOutputFromInputs });
+        // Check if the gate's output is consistent with its current inputs, and if it needs justification.
+        // J-frontier: "consists of all gates whose output value is known but is not implied by its input values." [cite: 757]
+        const allInputsKnown = inputValuesForDrivingGate.every(
+          val => val !== SignalValue.X
+        );
+
+        log({ allInputsKnown });
+
+        if (allInputsKnown) {
+          // If all inputs are known, the simulated output MUST match the current output.
+          // If not, it's a direct conflict.
+          if (
+            backwardImplicationSigValue(simulatedOutputFromInputs) !==
+            currentOutputValue
+          ) {
+            conflictFound = true; // Conflict: known inputs imply one thing, but output is another.
+            break;
+          } else {
+            // All inputs known and consistent, so the gate's output is justified.
+            log(
+              `wire ${
+                drivingGate.output
+              } get removed from jFrontier: ${Array.from(jFrontier)}`
+            );
+            jFrontier.delete(drivingGate.output);
+          }
+        } else {
+          // Inputs are not all known, but output is known. It *might* need justification.
+          // If the simulated output from current inputs is X (meaning current inputs don't fully determine output),
+          // or if it implies a different value than the actual known output.
+          if (
+            simulatedOutputFromInputs === SignalValue.X ||
+            simulatedOutputFromInputs !== currentOutputValue
+          ) {
+            jFrontier.add(drivingGate.output); // Add to J-frontier as it needs justification.
+            log(
+              `wire ${drivingGate.output} get added to jFrontier: ${Array.from(
+                jFrontier
+              )}`
+            );
+          } else {
+            // Even with some X inputs, the known inputs might already imply the output (e.g., AND gate with a 0 input -> output 0).
+            log(
+              `wire ${
+                drivingGate.output
+              } get removed from jFrontier: ${Array.from(jFrontier)}`
+            );
+            jFrontier.delete(drivingGate.output); // Remove from J-frontier.
+          }
+        }
+      } // End of if (currentOutputValue !== SignalValue.X)
+    } // End of if (drivingGate)
+    if (conflictFound) return false; // Immediate return if conflict found during backward gate implications.
+  } // End of while loop (processingQueue)
+
+  return !conflictFound; // Return true if no conflict occurred throughout all implications.
 }
 
 // --- 6. Primitive D-Cube of Failure (PDF) ---
@@ -587,11 +818,10 @@ function dAlgRecursive(
   jFrontier,
   implicationStack
 ) {
-  // console.log({ currentState });
-  console.count("dAlgRecursive");
-  console.log({ dFrontier, jFrontier });
-  console.log(currentState.values);
-  console.log("===================================");
+  // console.count("dAlgRecursive");
+  // log("currentState", currentState.values);
+  log("dFrontier & jFrontier", { dFrontier, jFrontier });
+  log("===================================");
   // --- Step 1: Check for Success ---
   // A test is found if an error (D or D_BAR) has propagated to any primary output (PO)
   // AND all internal lines are justified (J-frontier is empty). [cite: 25]
@@ -599,6 +829,9 @@ function dAlgRecursive(
     [SignalValue.D, SignalValue.D_BAR].includes(currentState.get(po))
   );
 
+  log(`error is ${errorAtPO ? "" : "not"} at PO`);
+
+  // اگر ارور ب خروجی اصلی رسیده و جی فرانتیر خالی شده یعنی توجیه شده خطا یعنی تونستیم مقدار مورد نیار رو برسونیم ب خطا
   if (errorAtPO && jFrontier.size === 0) {
     return currentState; // Test found, return the current state as the test vector
   }
@@ -607,18 +840,23 @@ function dAlgRecursive(
   // If the error has not reached a PO AND the D-frontier is empty,
   // it means the fault effect cannot be propagated further. [cite_start]Backtrack. [cite: 12, 25]
   if (!errorAtPO && dFrontier.size === 0) {
+    log("Error is not at PO and dFrontier is empty so Error can not propagate");
     return null; // Cannot propagate fault, this path fails.
   }
 
   // --- Step 3: D-Drive (Propagate the fault effect) ---
   // If the error is not yet at a PO, attempt to propagate it further. [cite: 25]
   if (!errorAtPO) {
-    // Select an untried gate from the D-frontier.
+    // اگر ارور به خروجی نرسیده بود ولی همچنان تو دی فرانتر گیتی داشتیم ک قبلا امتحان نکرده بودیم اونو امتحان میکنیم
+    log("Select an untried gate from the D-frontier");
     // For simplicity, we iterate. In real D-ALG, heuristics guide this choice.
     const dFrontierGates = Array.from(dFrontier);
+    log(`current dFrontier: ${dFrontierGates}`);
+
     for (const gateOutputId of dFrontierGates) {
       const gate = currentState.gatesByOutput.get(gateOutputId);
       if (!gate) continue; // Should not happen if D-frontier is correctly managed
+      log({ gate });
 
       // Save the current state for potential backtracking
       const savedState = currentState.clone();
@@ -628,6 +866,7 @@ function dAlgRecursive(
 
       const nonControllingValue = getNonControllingValue(gate.type);
       const controllingValue = getControllingValue(gate.type);
+      log({ nonControllingValue, controllingValue });
 
       // Assign non-controlling value to all X inputs of the gate in D-frontier
       // to allow D/D_BAR to propagate.
@@ -662,8 +901,11 @@ function dAlgRecursive(
             wire: inputWire,
             value: valueToAssign,
           });
+          log({ assignmentsMadeInThisStep });
         }
       }
+
+      log({ assignmentSuccessful });
 
       if (assignmentSuccessful) {
         // Perform implications after making assignments
@@ -677,6 +919,7 @@ function dAlgRecursive(
             currentJFrontier
           )
         ) {
+          log("implyAndCheck was successfulllllllll");
           const result = dAlgRecursive(
             currentState,
             circuitInfo,
@@ -828,15 +1071,16 @@ function dAlgRecursive(
  * @returns {object | null} The final CircuitState (test vector) if a test is found, null otherwise.
  */
 function dAlg(circuitInfo, fault) {
-  console.count("dAlg");
+  // console.count("dAlg");
 
   // Initialize circuit state with all wires to X
   const initialState = new CircuitState(circuitInfo);
   const implicationStack = new ImplicationStack(); // Stack for decisions and implications
 
-  // Step 1: Activate the fault by applying its Primitive D-Cube of Failure (PDF). [cite: 415]
+  // Step 1: Activate the fault by applying its Primitive D-Cube of Failure (PDF).
   const pdf = getPDF(fault.wire, fault.value);
-  console.log("pdf", pdf);
+  log("pdf", pdf);
+
   for (const wire in pdf) {
     if (!initialState.assign(wire, pdf[wire])) {
       console.error(
@@ -844,6 +1088,7 @@ function dAlg(circuitInfo, fault) {
       );
       return null;
     }
+
     // Push the fault activation as the first decision on the stack
     implicationStack.push({
       wire: wire,
@@ -856,13 +1101,16 @@ function dAlg(circuitInfo, fault) {
   const dFrontier = new Set();
   const jFrontier = new Set();
 
-  // Perform initial implications after fault activation. [cite: 234]
+  // Perform initial implications after fault activation.
   if (!implyAndCheck(initialState, circuitInfo, dFrontier, jFrontier)) {
-    console.log(
-      "Initial implication after fault activation resulted in a conflict."
-    );
+    log("Initial implication after fault activation resulted in a conflict.");
     return null; // Conflict means fault is untestable from the start.
   }
+
+  log("dFrontier & jFrontier after initial implyAndCheck", {
+    dFrontier,
+    jFrontier,
+  });
 
   // Call the recursive D-Algorithm function
   return dAlgRecursive(
@@ -874,51 +1122,4 @@ function dAlg(circuitInfo, fault) {
   );
 }
 
-// --- 9. Extract Primary Input Values ---
-/**
- * Extracts the primary input values from a successful circuit state.
- * @param {CircuitState} finalState - The final circuit state containing the test vector.
- * @param {object} circuitInfo - The structural information of the circuit.
- * @returns {object} An object mapping primary input IDs to their assigned values.
- *
- */
-function extractPIValues(finalState, circuitInfo) {
-  const piValues = {};
-  circuitInfo.primaryInputs.forEach(pi => {
-    piValues[pi] = finalState.get(pi);
-  });
-  return piValues;
-}
-
-(async () => {
-  const circuit = await readCircuitDescription("a.txt");
-  // console.log(circuit);
-
-  const finalTestState = dAlg(circuit, circuit.stuckFaults[0]);
-
-  if (finalTestState) {
-    console.log("\n--- Test Vector Found! ---");
-    const piVector = extractPIValues(finalTestState, circuit);
-    console.log("Primary Input Test Vector:");
-    console.log(piVector);
-    // console.log("\nFinal Circuit State (all wires):");
-    // Sort wires for consistent output
-    const sortedWires = Array.from(circuit.allWires).sort();
-    const finalWireValues = {};
-    sortedWires.forEach(wire => {
-      finalWireValues[wire] = finalTestState.get(wire);
-    });
-    // console.log(finalWireValues);
-
-    // Verify PO values
-    console.log("\nPrimary Output Status:");
-    circuit.primaryOutputs.forEach(po => {
-      console.log(`${po}: ${finalTestState.get(po)}`);
-    });
-  } else {
-    console.log("\n--- Could not find a test vector for the given fault. ---");
-    console.log(
-      "This may indicate the fault is untestable (redundant) or the algorithm exhausted search paths."
-    );
-  }
-})();
+module.exports = { dAlg };

@@ -1,0 +1,12 @@
+fanout in(a), out(a1), out(a2)
+fanout in(b), out(b1), out(b2)
+fanout in(c), out(c1), out(c2)
+not out(b3), in(b2)
+not out(a3), in(a2)
+not out(c3), in(c2)
+and out(1), in(a3), in(b3), in(c1)
+and out(2), in(a3), in(b1), in(c3)
+and out(3), in(a1), in(b3), in(c3)
+and out(4), in(a1), in(b1), in(c1)
+or out(f), in(1), in(2), in(3), in(4) 
+STUCK_AT f, 1

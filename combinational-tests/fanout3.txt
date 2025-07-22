@@ -1,0 +1,9 @@
+fanout in(a), out(b), out(c), out(d)
+STUCK_AT a, 0   
+STUCK_AT a, 1 
+STUCK_AT b, 0 
+STUCK_AT b, 1 
+STUCK_AT c, 0 
+STUCK_AT c, 1 
+STUCK_AT d, 0 
+STUCK_AT d, 1
