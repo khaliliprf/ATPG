@@ -192,7 +192,7 @@ class CircuitState {
    * @returns {boolean} True if the assignment is consistent (no conflict), false otherwise.
    */
   assign(wire, value) {
-    log(wire, value);
+    log(`assign ${value} to ${wire}`);
     const currentValue = this.values[wire];
 
     if (currentValue === SignalValue.X) {
@@ -818,9 +818,12 @@ function dAlgRecursive(
   jFrontier,
   implicationStack
 ) {
-  // console.count("dAlgRecursive");
+  console.count("dAlgRecursive");
   // log("currentState", currentState.values);
-  log("dFrontier & jFrontier", { dFrontier, jFrontier });
+  log("dFrontier & jFrontier", {
+    dFrontier: Array.from(dFrontier),
+    jFrontier: Array.from(jFrontier),
+  });
   log("===================================");
   // --- Step 1: Check for Success ---
   // A test is found if an error (D or D_BAR) has propagated to any primary output (PO)
@@ -1122,4 +1125,4 @@ function dAlg(circuitInfo, fault) {
   );
 }
 
-module.exports = { dAlg };
+module.exports = { dAlg, backwardImplicationSigValue };
