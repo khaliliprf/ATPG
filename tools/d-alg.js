@@ -85,6 +85,7 @@ function simulateGate(gateType, inputs) {
       faultyInputs.push(input);
     }
   }
+  log({ goodInputs, faultyInputs });
 
   /**
    * Internal function to calculate a binary/X output for a given gate type.
@@ -93,7 +94,9 @@ function simulateGate(gateType, inputs) {
    * @returns {SignalValue} Calculated output.
    */
   const calculateBinaryOutput = (type, vals) => {
+    log({ type, vals });
     if (vals.includes(SignalValue.X)) hasX = true; // Update hasX for this context
+    log({ hasX });
 
     switch (type) {
       case "AND":
@@ -107,6 +110,10 @@ function simulateGate(gateType, inputs) {
       case "NOT":
         if (vals[0] === SignalValue["0"]) return SignalValue["1"];
         if (vals[0] === SignalValue["1"]) return SignalValue["0"];
+        return SignalValue.X;
+      case "BUFF":
+        if (vals[0] === SignalValue["0"]) return SignalValue["0"];
+        if (vals[0] === SignalValue["1"]) return SignalValue["1"];
         return SignalValue.X;
       case "NAND":
         const andOutput = calculateBinaryOutput("AND", vals);
@@ -565,9 +572,12 @@ function implyAndCheck(currentState, circuitInfo, dFrontier, jFrontier) {
       }
       // If the stem already has a value, check for consistency with the branch's value.
       else if (
-        currentBranchValue !== (SignalValue.D || SignalValue.D_BAR) &&
+        ![SignalValue.D, SignalValue.D_BAR].includes(currentBranchValue) &&
         currentValueOnStem !== currentBranchValue
       ) {
+        log(
+          `current branch value is not D or D_Bar and current branch value ${currentBranchValue} is not equal to current value on stem: ${currentValueOnStem}`
+        );
         conflictFound = true; // Conflict if stem value is different from branch.
         break; // Break on conflict.
       }
@@ -742,7 +752,9 @@ function implyAndCheck(currentState, circuitInfo, dFrontier, jFrontier) {
           } else {
             // All inputs known and consistent, so the gate's output is justified.
             log(
-              `wire ${
+              `all inputs know for ${drivingGate.type} gate with output ${
+                drivingGate.output
+              } so wire ${
                 drivingGate.output
               } get removed from jFrontier: ${Array.from(jFrontier)}`
             );
@@ -801,6 +813,81 @@ function getPDF(faultWire, faultValue) {
   return pdf;
 }
 
+/**
+ * تمام ترکیبات معتبر برای ورودی‌های X یک گیت را با فرمت مشخص شده برمی‌گرداند.
+ *
+ * @param {object} gate - آبجکت گیت.
+ * @param {0 | 1} targetOutputValue - مقدار خروجی مورد نظر.
+ * @param {Map<string, 0 | 1 | 'X'>} currentState - وضعیت فعلی وایرها.
+ * @returns {Array<Array<{inputToTry: string, valueToAssign: 0 | 1}>>} - لیستی از راه‌حل‌ها با فرمت درخواستی.
+ */
+function justifyXorXnorFormatted(gate, targetOutputValue, currentState) {
+  // مراحل 1 تا 4: محاسبات اولیه دقیقاً مانند قبل است
+  const knownInputs = new Map();
+  const xInputs = [];
+
+  for (const inputWire of gate.inputs) {
+    const value = currentState.get(inputWire);
+    if (value === "X") {
+      xInputs.push(inputWire);
+    } else {
+      knownInputs.set(inputWire, value);
+    }
+  }
+
+  let knownInputsXorSum = 0;
+  for (const value of knownInputs.values()) {
+    knownInputsXorSum ^= value;
+  }
+
+  const requiredTotalXorSum =
+    gate.type.toUpperCase() === "XOR"
+      ? targetOutputValue
+      : 1 - targetOutputValue;
+
+  const requiredXInputsXorSum = requiredTotalXorSum ^ knownInputsXorSum;
+
+  const allSolutions = [];
+  const numXInputs = xInputs.length;
+
+  // اگر ورودی X وجود ندارد
+  if (numXInputs === 0) {
+    // اگر حالت فعلی معتبر است، یک راه‌حل وجود دارد که نیازمند هیچ تغییری نیست (آرایه خالی)
+    return knownInputsXorSum === requiredTotalXorSum ? [[]] : [];
+  }
+
+  // حلقه اصلی برای تولید ترکیبات
+  for (let i = 0; i < Math.pow(2, numXInputs); i++) {
+    let currentCombinationXorSum = 0;
+    const currentCombination = new Map();
+
+    for (let j = 0; j < numXInputs; j++) {
+      const bit = (i >> j) & 1;
+      if (bit === 1) {
+        currentCombinationXorSum ^= 1;
+      }
+      currentCombination.set(xInputs[j], bit);
+    }
+
+    // اگر ترکیب معتبر بود، آن را با فرمت جدید به لیست راه‌حل‌ها اضافه کن
+    if (currentCombinationXorSum === requiredXInputsXorSum) {
+      // --- CHANGE IS HERE ---
+      const formattedSolution = Array.from(
+        currentCombination.entries(),
+        ([wire, value]) => ({
+          inputToTry: wire,
+          valueToAssign: String(value),
+        })
+      );
+      allSolutions.push(formattedSolution);
+      // --- END OF CHANGE ---
+    }
+  }
+
+  return allSolutions;
+}
+// اگر ترکیب معتبر بود، آن را با فرمت
+
 // --- 7. D-Algorithm Recursive Function ---
 /**
  * The main recursive D-Algorithm function.
@@ -818,7 +905,7 @@ function dAlgRecursive(
   jFrontier,
   implicationStack
 ) {
-  console.count("dAlgRecursive");
+  log("dAlgRecursive called");
   // log("currentState", currentState.values);
   log("dFrontier & jFrontier", {
     dFrontier: Array.from(dFrontier),
@@ -836,6 +923,7 @@ function dAlgRecursive(
 
   // اگر ارور ب خروجی اصلی رسیده و جی فرانتیر خالی شده یعنی توجیه شده خطا یعنی تونستیم مقدار مورد نیار رو برسونیم ب خطا
   if (errorAtPO && jFrontier.size === 0) {
+    log("Error is at PO and jFrontier is empty");
     return currentState; // Test found, return the current state as the test vector
   }
 
@@ -851,7 +939,11 @@ function dAlgRecursive(
   // If the error is not yet at a PO, attempt to propagate it further. [cite: 25]
   if (!errorAtPO) {
     // اگر ارور به خروجی نرسیده بود ولی همچنان تو دی فرانتر گیتی داشتیم ک قبلا امتحان نکرده بودیم اونو امتحان میکنیم
-    log("Select an untried gate from the D-frontier");
+    log(
+      `Error is not at PO and dFrontier is not empty so Select an untried gate from the D-frontier: ${Array.from(
+        dFrontier
+      )}`
+    );
     // For simplicity, we iterate. In real D-ALG, heuristics guide this choice.
     const dFrontierGates = Array.from(dFrontier);
     log(`current dFrontier: ${dFrontierGates}`);
@@ -861,11 +953,12 @@ function dAlgRecursive(
       if (!gate) continue; // Should not happen if D-frontier is correctly managed
       log({ gate });
 
-      // Save the current state for potential backtracking
+      log("Save the current state for potential backtracking");
       const savedState = currentState.clone();
       const savedDFrontier = new Set(dFrontier);
       const savedJFrontier = new Set(jFrontier);
       const savedStackSize = implicationStack.stack.length;
+      log(`implication Stack size:  ${savedStackSize}`);
 
       const nonControllingValue = getNonControllingValue(gate.type);
       const controllingValue = getControllingValue(gate.type);
@@ -884,6 +977,7 @@ function dAlgRecursive(
           continue; // This is the D-input, don't change it
         }
         if (currentState.get(inputWire) === SignalValue.X) {
+          // TODO
           // For XOR/XNOR, non-controlling value depends on good machine output.
           // For simplicity, we try 0 and 1 if nonControllingValue is null.
           const valueToAssign =
@@ -942,6 +1036,9 @@ function dAlgRecursive(
       savedDFrontier.forEach(item => dFrontier.add(item));
       jFrontier.clear();
       savedJFrontier.forEach(item => jFrontier.add(item));
+      log("Restore stack to before this decision");
+      log(implicationStack.stack);
+      log(`saved Stack Size: ${savedStackSize}`);
       implicationStack.trimToSize(savedStackSize); // Restore stack to before this decision
 
       // If we tried a default non-controlling value (like 0) and it failed, try the alternate (1)
@@ -969,19 +1066,30 @@ function dAlgRecursive(
     const gate = currentState.gatesByOutput.get(gateOutputIdToJustify);
     if (!gate) return null; // Should not happen
 
+    log("gate to justify: ", gate);
     const savedState = currentState.clone();
     const savedDFrontier = new Set(dFrontier);
     const savedJFrontier = new Set(jFrontier);
     const savedStackSize = implicationStack.stack.length;
 
-    const targetOutputValue = currentState.get(gateOutputIdToJustify);
+    const targetOutputValue = backwardImplicationSigValue(
+      currentState.get(gateOutputIdToJustify)
+    );
     const controllingValue = getControllingValue(gate.type);
     const nonControllingValue = getNonControllingValue(gate.type);
     const isOutputInverted =
       gate.type === "NAND" || gate.type === "NOR" || gate.type === "NOT";
 
+    log({
+      targetOutputValue,
+      controllingValue,
+      nonControllingValue,
+      isOutputInverted,
+    });
+
+    log("justifyXorXnorFormatted");
     // This part needs to iterate through 'singular cover' entries for the gate
-    // to find combinations of input values that justify the target output. [cite: 369]
+    // to find combinations of input values that justify the target output.
     // This is a simplified approach, focusing on trying values for X inputs.
     const xInputs = gate.inputs.filter(
       inputWire => currentState.get(inputWire) === SignalValue.X
@@ -992,73 +1100,181 @@ function dAlgRecursive(
       // This implies a conflict, so backtrack.
       return null;
     }
-
+    log({ xInputs });
     // Simplistic justification strategy:
     // Try to set one X input to controlling value if the targetOutput requires it
     // Or set all X inputs to non-controlling if the target output requires non-controlling values from all inputs.
     // This would require a more sophisticated singular cover lookup.
     // For a general case, we can try assigning '0' then '1' to one of the X inputs.
-    const inputToTry = xInputs[0]; // Select one X input to assign
-    const valuesToAttempt = [SignalValue["0"], SignalValue["1"]]; // Try 0 then 1
 
-    for (const valueToAssign of valuesToAttempt) {
-      const trialState = savedState.clone(); // Start from saved state for each attempt
-      const trialDFrontier = new Set(savedDFrontier);
-      const trialJFrontier = new Set(savedJFrontier);
-      const trialStackSize = savedStackSize;
+    if (["XOR", "XNOR"].includes(gate.type)) {
+      const attempts = justifyXorXnorFormatted(
+        gate,
+        targetOutputValue,
+        savedState
+      ); // Try 0 then 1
 
-      if (trialState.assign(inputToTry, valueToAssign)) {
-        // Mark this as a decision point for backtracking
-        implicationStack.push({
-          wire: inputToTry,
-          value: valueToAssign,
-          isDecision: true,
-          triedAlternate: false,
-        });
+      for (const attempt of attempts) {
+        const trialDFrontier = new Set(savedDFrontier);
+        const trialJFrontier = new Set(savedJFrontier);
+        const trialStackSize = savedStackSize;
+        const trialState = savedState.clone(); // Start from saved state for each attempt
 
-        if (
-          implyAndCheck(trialState, circuitInfo, trialDFrontier, trialJFrontier)
-        ) {
-          // Check if the current J-frontier gate is now justified.
-          // Important: J-frontier is updated inside implyAndCheck.
-          // If the current gate is *not* in trialJFrontier after implication, it means it's justified.
-          if (!trialJFrontier.has(gateOutputIdToJustify)) {
-            // Found a consistent path that justifies the target gate,
-            // now continue dAlgRecursive with the new state.
-            const result = dAlgRecursive(
+        let assignmentSuccessful = true;
+        const assignmentsMadeInThisStep = [];
+        for (const inputComposition of attempt) {
+          const inputToTry = inputComposition.inputToTry;
+          const valueToAssign = inputComposition.valueToAssign;
+          log({ inputToTry, valueToAssign });
+
+          if (!trialState.assign(inputToTry, valueToAssign)) {
+            assignmentSuccessful = false;
+            break;
+          }
+          // Mark this as a decision point for backtracking
+          implicationStack.push({
+            wire: inputToTry,
+            value: valueToAssign,
+            isDecision: true,
+            triedAlternate: false,
+          });
+          assignmentsMadeInThisStep.push({
+            wire: inputToTry,
+            value: valueToAssign,
+          });
+        }
+        log({ assignmentsMadeInThisStep });
+        log("implicationStack((((", implicationStack);
+
+        if (assignmentSuccessful) {
+          if (
+            implyAndCheck(
               trialState,
               circuitInfo,
               trialDFrontier,
-              trialJFrontier,
-              implicationStack
-            );
-            if (result) {
-              return result; // Test found!
+              trialJFrontier
+            )
+          ) {
+            // Check if the current J-frontier gate is now justified.
+            // Important: J-frontier is updated inside implyAndCheck.
+            // If the current gate is *not* in trialJFrontier after implication, it means it's justified.
+            if (!trialJFrontier.has(gateOutputIdToJustify)) {
+              // Found a consistent path that justifies the target gate,
+              // now continue dAlgRecursive with the new state.
+              const result = dAlgRecursive(
+                trialState,
+                circuitInfo,
+                trialDFrontier,
+                trialJFrontier,
+                implicationStack
+              );
+              if (result) {
+                return result; // Test found!
+              }
+            } else {
+              log(
+                `The gate ${gate.type} with output: ${gateOutputIdToJustify} is still in J-frontier even after trying this assignment`
+              );
+              // The gate is still in J-frontier even after trying this assignment.
+              // This path didn't fully justify, try next.
             }
-          } else {
-            // The gate is still in J-frontier even after trying this assignment.
-            // This path didn't fully justify, try next.
           }
         }
+
+        // Backtrack if this attempt fails: restore state and pop implications made in this specific branch.
+        currentState = savedState;
+        dFrontier.clear();
+        savedDFrontier.forEach(item => dFrontier.add(item));
+        jFrontier.clear();
+        savedJFrontier.forEach(item => jFrontier.add(item));
+        implicationStack.trimToSize(savedStackSize); // Restore stack before this decision
+        // Mark the last decision as tried for its alternate.
+        const lastDecision = implicationStack.peek(); // This is complex, better to manage 'isDecision' in stack
+        log({ lastDecision });
+        if (
+          lastDecision &&
+          lastDecision.wire === inputToTry &&
+          lastDecision.value === valueToAssign
+        ) {
+          lastDecision.triedAlternate = true; // Mark as tried if it was a decision
+        }
       }
-      // Backtrack if this attempt fails: restore state and pop implications made in this specific branch.
-      currentState = savedState;
-      dFrontier.clear();
-      savedDFrontier.forEach(item => dFrontier.add(item));
-      jFrontier.clear();
-      savedJFrontier.forEach(item => jFrontier.add(item));
-      implicationStack.trimToSize(savedStackSize); // Restore stack before this decision
-      // Mark the last decision as tried for its alternate.
-      const lastDecision = implicationStack.peek(); // This is complex, better to manage 'isDecision' in stack
-      if (
-        lastDecision &&
-        lastDecision.wire === inputToTry &&
-        lastDecision.value === valueToAssign
-      ) {
-        lastDecision.triedAlternate = true; // Mark as tried if it was a decision
+      log("All justification attempts for this gate failed.");
+      return null; //
+    } else {
+      // TODO not xor and xnor
+      const inputToTry = xInputs[0]; // Select one X input to assign
+      const valuesToAttempt = [SignalValue["0"], SignalValue["1"]]; // Try 0 then 1
+
+      for (const valueToAssign of valuesToAttempt) {
+        log({ inputToTry, valueToAssign });
+        const trialState = savedState.clone(); // Start from saved state for each attempt
+        const trialDFrontier = new Set(savedDFrontier);
+        const trialJFrontier = new Set(savedJFrontier);
+        const trialStackSize = savedStackSize;
+
+        if (trialState.assign(inputToTry, valueToAssign)) {
+          // Mark this as a decision point for backtracking
+          implicationStack.push({
+            wire: inputToTry,
+            value: valueToAssign,
+            isDecision: true,
+            triedAlternate: false,
+          });
+
+          if (
+            implyAndCheck(
+              trialState,
+              circuitInfo,
+              trialDFrontier,
+              trialJFrontier
+            )
+          ) {
+            // Check if the current J-frontier gate is now justified.
+            // Important: J-frontier is updated inside implyAndCheck.
+            // If the current gate is *not* in trialJFrontier after implication, it means it's justified.
+            if (!trialJFrontier.has(gateOutputIdToJustify)) {
+              // Found a consistent path that justifies the target gate,
+              // now continue dAlgRecursive with the new state.
+              const result = dAlgRecursive(
+                trialState,
+                circuitInfo,
+                trialDFrontier,
+                trialJFrontier,
+                implicationStack
+              );
+              if (result) {
+                return result; // Test found!
+              }
+            } else {
+              log(
+                `The gate ${gate.type} with output: ${gateOutputIdToJustify} is still in J-frontier even after trying this assignment`
+              );
+              // The gate is still in J-frontier even after trying this assignment.
+              // This path didn't fully justify, try next.
+            }
+          }
+        }
+        // Backtrack if this attempt fails: restore state and pop implications made in this specific branch.
+        currentState = savedState;
+        dFrontier.clear();
+        savedDFrontier.forEach(item => dFrontier.add(item));
+        jFrontier.clear();
+        savedJFrontier.forEach(item => jFrontier.add(item));
+        implicationStack.trimToSize(savedStackSize); // Restore stack before this decision
+        // Mark the last decision as tried for its alternate.
+        const lastDecision = implicationStack.peek(); // This is complex, better to manage 'isDecision' in stack
+        if (
+          lastDecision &&
+          lastDecision.wire === inputToTry &&
+          lastDecision.value === valueToAssign
+        ) {
+          lastDecision.triedAlternate = true; // Mark as tried if it was a decision
+        }
       }
+      log("All justification attempts for this gate failed.");
+      return null; //
     }
-    return null; // All justification attempts for this gate failed.
   }
 
   // Should not reach here in a complete D-ALG unless all paths failed.

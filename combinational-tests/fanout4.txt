@@ -1,3 +1,4 @@
+fanout in(a), out(b), out(c), out(d), out(f)
 STUCK_AT a, 0   
 STUCK_AT a, 1 
 STUCK_AT b, 0 
@@ -8,4 +9,3 @@ STUCK_AT d, 0
 STUCK_AT d, 1 
 STUCK_AT f, 0 
 STUCK_AT f, 1  
-STUCK_AT a, 1

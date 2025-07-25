@@ -1,4 +1,4 @@
-buff out(f) in(a)
+buff out(f), in(a)
 STUCK_AT a, 0  
 STUCK_AT a, 1
 STUCK_AT f, 0

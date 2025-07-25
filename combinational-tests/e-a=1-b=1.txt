@@ -1,5 +1,5 @@
-FANOUT IN(a), OUT(i) , OUT(h)
-FANOUT IN(b), OUT(m) , OUT(k)
+FANOUT IN(a), OUT(i), OUT(h)
+FANOUT IN(b), OUT(m), OUT(k)
 AND out(c), in(i), in(m)
 AND out(x), in(j), in(k)
 OR out(f), in(c), in(x)
