@@ -23,6 +23,7 @@ function unrollCircuit(circuit, numTimeFrames) {
     primaryInputs: [],
     primaryOutputs: [],
     allWires: new Set(),
+    initialStatePIs: [],
   };
 
   const getWireName = (originalName, frameIndex) => {
@@ -93,20 +94,38 @@ function unrollCircuit(circuit, numTimeFrames) {
 
   // مرحله 3: تعریف نهایی ورودی‌ها و خروجی‌های حالت
   circuit.dffs.forEach(dff => {
-    unrolledCircuit.primaryInputs.push(getWireName(dff.q, firstFrameIndex));
+    const q_initial_wire = getWireName(dff.q, firstFrameIndex);
+    unrolledCircuit.primaryInputs.push(q_initial_wire);
+    unrolledCircuit.initialStatePIs.push(q_initial_wire);
+
     if (dff.q_bar) {
-      unrolledCircuit.primaryInputs.push(
-        getWireName(dff.q_bar, firstFrameIndex)
-      );
+      const q_bar_initial_wire = getWireName(dff.q_bar, firstFrameIndex);
+      unrolledCircuit.primaryInputs.push(q_bar_initial_wire);
+      unrolledCircuit.initialStatePIs.push(q_bar_initial_wire);
     }
     unrolledCircuit.primaryOutputs.push(getWireName(dff.d, 0));
   });
 
-  // جمع‌آوری تمام سیم‌ها
+  // --- CORRECTION IS HERE --------
+  // Final Step: Collect ALL wires used in the unrolled circuit.
+  // This must include wires from gates, PIs, and POs to be complete.
+
+  // 1. Add all wires from gate connections
   unrolledCircuit.gates.forEach(gate => {
     unrolledCircuit.allWires.add(gate.output);
     gate.inputs.forEach(input => unrolledCircuit.allWires.add(input));
   });
+
+  // 2. Add all primary inputs
+  unrolledCircuit.primaryInputs.forEach(pi => {
+    unrolledCircuit.allWires.add(pi);
+  });
+
+  // 3. Add all primary outputs
+  unrolledCircuit.primaryOutputs.forEach(po => {
+    unrolledCircuit.allWires.add(po);
+  });
+  // --- END OF CORRECTION ---
 
   return unrolledCircuit;
 }

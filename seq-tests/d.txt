@@ -5,11 +5,11 @@ FANOUT  in(J), out(D1), out(S)
 AND out(J), in(F), in(E) 
 AND out(G), in(Q2), in(L) 
 
-OR out(E), in(Q2_bar), in(K) 
+OR out(E), in(Q2_BAR), in(K) 
 OR out(D2), in(H), in(G)
-OR out(Z), in(Q1_bar), in(S)
+OR out(Z), in(Q1_BAR), in(S)
 
+DFF d(D1), clock(CLK), q(Q1), q_bar(Q1_BAR)
+DFF d(D2), clock(CLK), q(Q2), q_bar(Q2_BAR) 
 
-DFF d(D1), clock(clk), q(Q1), q_bar(Q1_bar)
-DFF d(D2), clock(clk), q(Q2), q_bar(Q2_bar) 
-
+STUCK_AT Q1, 1
