@@ -1,0 +1,11 @@
+FANOUT in(a), out(a1), out(a2)
+FANOUT in(b), out(b1), out(b2)
+FANOUT in(e), out(e1), out(e2)
+and out(b), in(a1), in(p)
+and out(n), in(h), in(e2)
+or out(p), in(m), in(e1)
+or out(y), in(n), in(a2)
+or out(z), in(c), in(b1)
+DFF d(b2), clock(ck), q(e), q_bar(c)
+DFF d(y), clock(ck), q(h), q_bar(m)       
+STUCK_AT c, 0

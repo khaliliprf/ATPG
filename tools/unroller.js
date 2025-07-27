@@ -1,28 +1,23 @@
 /**
- * این تابع یک مدار ترتیبی را به یک مدار ترکیبی بزرگتر با استفاده از روش بسط چارچوب زمانی تبدیل می‌کند.
- * @param {object} circuit - شیء ورودی که شامل مشخصات مدار است.
- * @param {number} numTimeFrames - تعداد چارچوب‌های زمانی برای باز کردن مدار (باید >= 1 باشد).
- * @returns {object} - یک شیء جدید که مدار باز شده را توصیف می‌کند.
- */
-/**
- * نسخه اصلاح شده: کلاک به عنوان ورودی اصلی در نظر گرفته نمی‌شود.
- * @param {object} circuit - شیء ورودی که شامل مشخصات مدار است.
- * @param {number} numTimeFrames - تعداد چارچوب‌های زمانی برای باز کردن مدار (باید >= 1 باشد).
- * @returns {object} - یک شیء جدید که مدار باز شده را توصیف می‌کند.
+ * Final, corrected version: Creates a fully explicit netlist by detecting and generating
+ * fanout objects for any wire driving more than one load. Correctly models qBar
+ * for all time-frames and treats the clock implicitly.
+ * @param {object} circuit - The original circuit object.
+ * @param {number} numTimeFrames - The number of time-frames for unrolling.
+ * @returns {object} A new object describing the explicit unrolled circuit.
  */
 function unrollCircuit(circuit, numTimeFrames) {
   if (numTimeFrames < 1) {
     return JSON.parse(JSON.stringify(circuit));
   }
 
-  const unrolledCircuit = {
+  const implicitCircuit = {
     gates: [],
     fanouts: [],
     dffs: [],
     stuckFaults: [],
     primaryInputs: [],
     primaryOutputs: [],
-    allWires: new Set(),
     initialStatePIs: [],
   };
 
@@ -31,103 +26,148 @@ function unrollCircuit(circuit, numTimeFrames) {
     return `${originalName}-${Math.abs(frameIndex)}`;
   };
 
-  // --- تغییر جدید: شناسایی سیگنال‌های کلاک ---
   const clockSignals = new Set(circuit.dffs.map(dff => dff.clock));
-
   const firstFrameIndex = -(numTimeFrames - 1);
 
-  // مرحله 1: باز کردن مدار برای هر چارچوب زمانی
+  // --- Step 1: Create a logically correct but IMPLICIT unrolled circuit ---
   for (let frame = 0; frame >= firstFrameIndex; frame--) {
-    circuit.gates.forEach(gate => {
-      unrolledCircuit.gates.push({
-        type: gate.type,
-        output: getWireName(gate.output, frame),
-        inputs: gate.inputs.map(input => getWireName(input, frame)),
-      });
-    });
-
-    circuit.fanouts.forEach(fanout => {
-      unrolledCircuit.fanouts.push({
-        input: getWireName(fanout.input, frame),
-        outputs: fanout.outputs.map(out => getWireName(out, frame)),
-      });
-    });
-
-    circuit.stuckFaults.forEach(fault => {
-      unrolledCircuit.stuckFaults.push({
-        wire: getWireName(fault.wire, frame),
-        value: fault.value,
-      });
-    });
-
-    // --- تغییر جدید: اضافه کردن ورودی‌های اصلی به جز کلاک ---
-    circuit.primaryInputs.forEach(pi => {
-      if (!clockSignals.has(pi)) {
-        unrolledCircuit.primaryInputs.push(getWireName(pi, frame));
-      }
-    });
-
-    circuit.primaryOutputs.forEach(po => {
-      unrolledCircuit.primaryOutputs.push(getWireName(po, frame));
-    });
+    circuit.gates.forEach(g =>
+      implicitCircuit.gates.push({
+        type: g.type,
+        output: getWireName(g.output, frame),
+        inputs: g.inputs.map(i => getWireName(i, frame)),
+      })
+    );
+    circuit.fanouts.forEach(f =>
+      implicitCircuit.fanouts.push({
+        input: getWireName(f.input, frame),
+        outputs: f.outputs.map(o => getWireName(o, frame)),
+      })
+    );
+    circuit.stuckFaults.forEach(s =>
+      implicitCircuit.stuckFaults.push({
+        wire: getWireName(s.wire, frame),
+        value: s.value,
+      })
+    );
+    circuit.primaryInputs.forEach(
+      pi =>
+        !clockSignals.has(pi) &&
+        implicitCircuit.primaryInputs.push(getWireName(pi, frame))
+    );
+    circuit.primaryOutputs.forEach(po =>
+      implicitCircuit.primaryOutputs.push(getWireName(po, frame))
+    );
   }
 
-  // مرحله 2: اتصال چارچوب‌ها
   circuit.dffs.forEach(dff => {
     for (let frame = 0; frame > firstFrameIndex; frame--) {
-      const q_current = getWireName(dff.q, frame);
-      const d_previous = getWireName(dff.d, frame - 1);
-      unrolledCircuit.gates.push({
+      implicitCircuit.gates.push({
         type: "BUFF",
-        output: q_current,
-        inputs: [d_previous],
+        output: getWireName(dff.q, frame),
+        inputs: [getWireName(dff.d, frame - 1)],
       });
-      if (dff.q_bar) {
-        unrolledCircuit.gates.push({
+    }
+    // CORRECTED: Use 'qBar' and ensure NOT gate is created for ALL frames
+    if (dff.qBar) {
+      for (let frame = 0; frame >= firstFrameIndex; frame--) {
+        implicitCircuit.gates.push({
           type: "NOT",
-          output: getWireName(dff.q_bar, frame),
-          inputs: [q_current],
+          output: getWireName(dff.qBar, frame),
+          inputs: [getWireName(dff.q, frame)],
         });
       }
     }
   });
 
-  // مرحله 3: تعریف نهایی ورودی‌ها و خروجی‌های حالت
   circuit.dffs.forEach(dff => {
-    const q_initial_wire = getWireName(dff.q, firstFrameIndex);
-    unrolledCircuit.primaryInputs.push(q_initial_wire);
-    unrolledCircuit.initialStatePIs.push(q_initial_wire);
+    const q_initial = getWireName(dff.q, firstFrameIndex);
+    implicitCircuit.primaryInputs.push(q_initial);
+    implicitCircuit.initialStatePIs.push(q_initial);
+    // CORRECTED: Do NOT add qBar as a primary input
+    implicitCircuit.primaryOutputs.push(getWireName(dff.d, 0));
+  });
 
-    if (dff.q_bar) {
-      const q_bar_initial_wire = getWireName(dff.q_bar, firstFrameIndex);
-      unrolledCircuit.primaryInputs.push(q_bar_initial_wire);
-      unrolledCircuit.initialStatePIs.push(q_bar_initial_wire);
+  // --- Step 2: Transform the implicit circuit into an EXPLICIT one ---
+  const explicitCircuit = { ...implicitCircuit, gates: [], fanouts: [] };
+  const wireDestinations = new Map();
+
+  // Pass 1: Find all destinations for every wire from both gates AND fanouts
+  implicitCircuit.gates.forEach(gate => {
+    gate.inputs.forEach((inputWire, index) => {
+      if (!wireDestinations.has(inputWire)) wireDestinations.set(inputWire, []);
+      wireDestinations
+        .get(inputWire)
+        .push({ component: gate, type: "gate", index });
+    });
+  });
+  // CORRECTED: Also count fanouts as destinations
+  implicitCircuit.fanouts.forEach(fanout => {
+    const inputWire = fanout.input;
+    if (!wireDestinations.has(inputWire)) wireDestinations.set(inputWire, []);
+    wireDestinations.get(inputWire).push({ component: fanout, type: "fanout" });
+  });
+
+  const processedStems = new Set();
+  const finalGates = [];
+  const finalFanouts = [];
+
+  // Pass 2: Re-write the netlist, inserting explicit fanouts
+  implicitCircuit.gates.forEach(gate => {
+    const newGate = { ...gate, inputs: [...gate.inputs] };
+    gate.inputs.forEach((inputWire, index) => {
+      const destinations = wireDestinations.get(inputWire);
+      if (destinations && destinations.length > 1) {
+        const destInfo = destinations.find(
+          d => d.component === gate && d.index === index
+        );
+        const branchIndex = destinations.indexOf(destInfo);
+        const newBranchName = `${inputWire}_branch_${branchIndex + 1}`;
+        newGate.inputs[index] = newBranchName;
+        if (!processedStems.has(inputWire)) {
+          const branchNames = destinations.map(
+            (d, i) => `${inputWire}_branch_${i + 1}`
+          );
+          finalFanouts.push({ input: inputWire, outputs: branchNames });
+          processedStems.add(inputWire);
+        }
+      }
+    });
+    finalGates.push(newGate);
+  });
+
+  implicitCircuit.fanouts.forEach(fanout => {
+    const inputWire = fanout.input;
+    const destinations = wireDestinations.get(inputWire);
+    if (destinations && destinations.length > 1) {
+      const destInfo = destinations.find(d => d.component === fanout);
+      const branchIndex = destinations.indexOf(destInfo);
+      const newBranchName = `${inputWire}_branch_${branchIndex + 1}`;
+      finalFanouts.push({ ...fanout, input: newBranchName });
+    } else {
+      finalFanouts.push(fanout);
     }
-    unrolledCircuit.primaryOutputs.push(getWireName(dff.d, 0));
   });
 
-  // --- CORRECTION IS HERE --------
-  // Final Step: Collect ALL wires used in the unrolled circuit.
-  // This must include wires from gates, PIs, and POs to be complete.
+  explicitCircuit.gates = finalGates;
+  explicitCircuit.fanouts = finalFanouts;
 
-  // 1. Add all wires from gate connections
-  unrolledCircuit.gates.forEach(gate => {
-    unrolledCircuit.allWires.add(gate.output);
-    gate.inputs.forEach(input => unrolledCircuit.allWires.add(input));
+  // Final Step: Collect ALL wires from the final, explicit netlist.
+  explicitCircuit.allWires = new Set();
+  explicitCircuit.gates.forEach(g => {
+    explicitCircuit.allWires.add(g.output);
+    g.inputs.forEach(i => explicitCircuit.allWires.add(i));
   });
-
-  // 2. Add all primary inputs
-  unrolledCircuit.primaryInputs.forEach(pi => {
-    unrolledCircuit.allWires.add(pi);
+  explicitCircuit.fanouts.forEach(f => {
+    explicitCircuit.allWires.add(f.input);
+    f.outputs.forEach(o => explicitCircuit.allWires.add(o));
   });
+  explicitCircuit.primaryInputs.forEach(pi => explicitCircuit.allWires.add(pi));
+  explicitCircuit.primaryOutputs.forEach(po =>
+    explicitCircuit.allWires.add(po)
+  );
 
-  // 3. Add all primary outputs
-  unrolledCircuit.primaryOutputs.forEach(po => {
-    unrolledCircuit.allWires.add(po);
-  });
-  // --- END OF CORRECTION ---
-
-  return unrolledCircuit;
+  return explicitCircuit;
 }
 
 module.exports = { unrollCircuit };

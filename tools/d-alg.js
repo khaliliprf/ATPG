@@ -1118,11 +1118,11 @@ function dAlgRecursive(
     } else realXInputs = xInputs;
 
     log({ realXInputs, stateXInputs });
-    console.log({ realXInputs, stateXInputs });
+    log({ realXInputs, stateXInputs });
 
     // A helper function to attempt justification for a given set of inputs
     const attemptJustification = inputsToTry => {
-      console.log({ inputsToTry });
+      log({ inputsToTry });
       for (const inputToTry of inputsToTry) {
         const valuesToAttempt = [SignalValue["1"], SignalValue["0"]];
         for (const valueToAssign of valuesToAttempt) {
@@ -1174,6 +1174,7 @@ function dAlgRecursive(
     // For a general case, we can try assigning '0' then '1' to one of the X inputs.
 
     if (["XOR", "XNOR"].includes(gate.type)) {
+      log("XOR or XNOR gate justify");
       const attempts = justifyXorXnorFormatted(
         gate,
         targetOutputValue,
@@ -1268,6 +1269,8 @@ function dAlgRecursive(
       log("All justification attempts for this gate failed.");
       return null; //
     } else {
+      log("other than (XOR or XNOR) gate justify");
+
       // Priority 1: Try justifying using only real inputs
       let solution = attemptJustification(realXInputs);
       if (solution) {
@@ -1275,9 +1278,11 @@ function dAlgRecursive(
       }
 
       // Priority 2 (Last Resort): If the above fails, try justifying using initial state inputs
-      solution = attemptJustification(stateXInputs);
-      if (solution) {
-        return solution;
+      if (stateXInputs) {
+        solution = attemptJustification(stateXInputs);
+        if (solution) {
+          return solution;
+        }
       }
     }
     // else {

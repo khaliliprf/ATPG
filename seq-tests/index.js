@@ -2,6 +2,7 @@
 const { dAlg } = require("../tools/d-alg");
 const { unrollCircuit } = require("../tools/unroller");
 const { readCircuitDescription } = require("../tools/parser");
+const { log } = require("../tools/log");
 const chalk = require("chalk");
 
 /**
@@ -14,25 +15,16 @@ const chalk = require("chalk");
  */
 function findTestVectorSequentially(circuitInfo, fault, maxFramesLimit = 10) {
   for (let numFrames = 1; numFrames <= maxFramesLimit; numFrames++) {
-    console.log(`\n--- Attempting with ${numFrames} time-frame(s) ---`);
+    log(`\n--- Attempting with ${numFrames} time-frame(s) ---`);
 
-    console.log("circuitInfo", circuitInfo);
     const unrolledCircuit = unrollCircuit(
       structuredClone(circuitInfo),
       numFrames
     );
 
-    console.log("---------------unrolled");
-    console.log(unrolledCircuit);
-    console.log(unrolledCircuit.gates);
-    console.log(unrolledCircuit.fanouts);
-    continue;
     const testResultState = dAlg(unrolledCircuit, fault);
 
     if (testResultState) {
-      // --- NEW VALIDATION STEP ---
-      // A test is only valid if it does NOT depend on a specific initial state.
-      // The initial state must be achievable from 'X'.
       const isTestValid = checkInitialStateDependency(
         testResultState,
         circuitInfo,
@@ -40,16 +32,16 @@ function findTestVectorSequentially(circuitInfo, fault, maxFramesLimit = 10) {
       );
 
       if (isTestValid) {
-        console.log(">> Valid test found (independent of initial state)!");
+        log(">> Valid test found (independent of initial state)!");
         return extractTestSequence(testResultState, circuitInfo, numFrames);
       } else {
-        console.log(
+        log(
           `>> Test found, but it depends on a specific initial state. More frames needed for justification...`
         );
         // Continue the loop to try with more frames to justify this required state.
       }
     } else {
-      console.log(
+      log(
         `>> No test found with ${numFrames} frame(s). Trying with more frames...`
       );
     }
@@ -59,6 +51,40 @@ function findTestVectorSequentially(circuitInfo, fault, maxFramesLimit = 10) {
     "\n--- Test not found after reaching the maximum frame limit ---"
   );
   return null;
+}
+
+/**
+ * Formats a test sequence and circuit info into a human-readable string.
+ * @param {Array<object>} sequence - The test sequence, an array of {frame, vector} objects.
+ * @param {object} circuitInfo - The original circuit information object, containing the fault list.
+ * @returns {string} The formatted output string.
+ */
+function formatTestSequence(sequence, circuitInfo) {
+  let outputLines = [];
+
+  // 1. Format the fault line from the circuit information.
+  if (circuitInfo.stuckFaults && circuitInfo.stuckFaults.length > 0) {
+    const fault = circuitInfo.stuckFaults[0];
+    outputLines.push(`STUCK_AT ${fault.wire}, ${fault.value}`);
+  }
+
+  // 2. Sort the sequence by frame number to ensure chronological order.
+  const sortedSequence = [...sequence].sort((a, b) => a.frame - b.frame);
+
+  // 3. Format each vector line.
+  sortedSequence.forEach((frameData, index) => {
+    const lineNumber = index + 1; // Line numbers start from 1.
+
+    // Convert the vector object { An: '1', Bn: '1' } to "An=1, Bn=1"
+    const vectorString = Object.entries(frameData.vector)
+      .map(([pi, value]) => `${pi}=${value}`)
+      .join(", ");
+
+    outputLines.push(`@${lineNumber}  ${vectorString}`);
+  });
+
+  // 4. Join all lines with a newline character and return.
+  return outputLines.join("\n");
 }
 
 /**
@@ -73,11 +99,6 @@ function checkInitialStateDependency(
   originalCircuitInfo,
   numFrames
 ) {
-  //   console.log(finalState);
-  //   console.log("999999999999999999999999999999999999999999999999");
-  //   console.log(originalCircuitInfo);
-  //   console.log("8888888888888888888888888888888888888888888888");
-  //   console.log(numFrames);
   const firstFrameIndex = -(numFrames - 1);
 
   // Helper to get wire name for a specific frame
@@ -89,13 +110,13 @@ function checkInitialStateDependency(
   // Check the value of each initial state input (PPI of the first frame)
   for (const dff of originalCircuitInfo.dffs) {
     const q_initial_wire = getWireName(dff.q, firstFrameIndex);
-    console.log({ q_initial_wire });
+    log({ q_initial_wire });
     if (finalState.get(q_initial_wire) !== "X") {
       return false; // Dependency found!
     }
     if (dff.q_bar) {
       const q_bar_initial_wire = getWireName(dff.q_bar, firstFrameIndex);
-      console.log({ q_bar_initial_wire });
+      log({ q_bar_initial_wire });
       if (finalState.get(q_bar_initial_wire) !== "X") {
         return false; // Dependency found!
       }
@@ -137,18 +158,22 @@ async function run(filename) {
   const originalCircuit = await readCircuitDescription(
     `./seq-tests/${filename}.txt`
   );
-  const result = findTestVectorSequentially(
-    originalCircuit,
-    originalCircuit.stuckFaults[0],
-    2
-  );
-  console.log("result", result);
+  for (const fault of originalCircuit.stuckFaults) {
+    const circuit = structuredClone(originalCircuit);
+    circuit.stuckFaults = [fault];
+
+    const result = findTestVectorSequentially(circuit, fault, 10);
+
+    const formatted = formatTestSequence(result, circuit);
+    console.log(chalk.blue(`----------${filename}----------`));
+    console.log(chalk.green(formatted));
+  }
 }
 
 async function runSequentialTests() {
-  // run("b");
+  run("b");
   run("d");
-  // run("behrouz");
+  run("f");
 }
 
 module.exports = { runSequentialTests };
